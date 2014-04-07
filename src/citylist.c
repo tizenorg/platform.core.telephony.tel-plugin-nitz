@@ -669,7 +669,7 @@ static NITZ_MCC_TZFILE_MAP *nitz_find_tzinfo_by_mcc(int mcc)
 {
 	NITZ_MCC_TZFILE_MAP *t = NULL;
 
-	if (mcc < 0)
+	if (mcc <= 0)
 		return NULL;
 
 	t = nitz_table_mcc_tzfile;

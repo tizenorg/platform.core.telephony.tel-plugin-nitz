@@ -35,19 +35,17 @@
 #define PLUGIN_VERSION 1
 #endif
 
-static enum tcore_hook_return on_hook_network_timeinfo(Server *s,
-			CoreObject *source,
-			enum tcore_notification_command command,
-			unsigned int data_len, void *data, void *user_data)
+static TcoreHookReturn on_hook_network_timeinfo(TcorePlugin *source,
+			TcoreNotification command,
+			guint data_len, void *data, void *user_data)
 {
-	struct tnoti_network_timeinfo *timeinfo = data;
+	TelNetworkNitzInfoNoti *timeinfo = data;
 	gboolean flag_auto_update = FALSE;
 
-	filelog("NITZ !! (time(NULL) = %u)", (unsigned int)time(NULL));
-	dbg("+- %04d-%02d-%02d %02d:%02d:%02d wday=%d",
+	filelog("NITZ !! (time(NULL) = %u)", (guint)time(NULL));
+	dbg("+- %04d-%02d-%02d %02d:%02d:%02d",
 			timeinfo->year, timeinfo->month, timeinfo->day,
-			timeinfo->hour, timeinfo->minute, timeinfo->second,
-			timeinfo->wday);
+			timeinfo->hour, timeinfo->minute, timeinfo->second);
 	dbg("+- GMT-offset:%d, DST-offset:%d, is_dst:%d",
 			timeinfo->gmtoff, timeinfo->dstoff, timeinfo->isdst);
 
@@ -61,32 +59,81 @@ static enum tcore_hook_return on_hook_network_timeinfo(Server *s,
 	return TCORE_HOOK_RETURN_CONTINUE;
 }
 
+static TcoreHookReturn on_hook_modem_plugin_added(Server *s,
+			TcoreServerNotification command,
+			guint data_len, void *data, void *user_data)
+{
+	TcorePlugin *modem_plugin;
+
+	modem_plugin = (TcorePlugin *)data;
+	tcore_check_return_value_assert(NULL != modem_plugin, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+
+	tcore_plugin_add_notification_hook(modem_plugin, TCORE_NOTIFICATION_NETWORK_TIMEINFO,
+					on_hook_network_timeinfo, NULL);
+
+	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+static TcoreHookReturn on_hook_modem_plugin_removed(Server *s,
+			TcoreServerNotification command,
+			guint data_len, void *data, void *user_data)
+{
+	TcorePlugin *modem_plugin;
+
+	modem_plugin = (TcorePlugin *)data;
+	tcore_check_return_value_assert(NULL != modem_plugin, TCORE_HOOK_RETURN_STOP_PROPAGATION);
+
+	tcore_plugin_remove_notification_hook(modem_plugin, TCORE_NOTIFICATION_NETWORK_TIMEINFO,
+					on_hook_network_timeinfo);
+
+	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
 static gboolean on_load()
 {
 	dbg("Load!!!");
-
 	return TRUE;
 }
 
-static gboolean on_init(TcorePlugin *p)
+static gboolean on_init(TcorePlugin *plugin)
 {
 	Server *s;
+	GSList *list = NULL;
+	TcorePlugin *modem_plugin;
+
+	tcore_check_return_value_assert(NULL != plugin, FALSE);
 
 	dbg("Init!!!");
 
-	s = tcore_plugin_ref_server(p);
-	if (s == NULL)
-		return FALSE;
-
-	tcore_server_add_notification_hook(s, TNOTI_NETWORK_TIMEINFO,
+	s = tcore_plugin_ref_server(plugin);
+	list = tcore_server_get_modem_plugin_list(s);
+	while (list) {	/* Process for pre-loaded Modem Plug-in */
+		modem_plugin = list->data;
+		if ( NULL != modem_plugin)
+			tcore_plugin_add_notification_hook(modem_plugin, TCORE_NOTIFICATION_NETWORK_TIMEINFO,
 					on_hook_network_timeinfo, NULL);
+		list = g_slist_next(list);
+	}
+	g_slist_free(list);
 
+	/* Register for post-loaded Modem Plug-ins */
+	tcore_server_add_notification_hook(s, TCORE_SERVER_NOTIFICATION_ADDED_MODEM_PLUGIN,
+					on_hook_modem_plugin_added, NULL);
+	tcore_server_add_notification_hook(s, TCORE_SERVER_NOTIFICATION_REMOVED_MODEM_PLUGIN,
+					on_hook_modem_plugin_removed, NULL);
 	return TRUE;
 }
 
-static void on_unload(TcorePlugin *p)
+static void on_unload(TcorePlugin *plugin)
 {
+	Server *s;
+
+	tcore_check_return_assert(NULL != plugin);
 	dbg("Unload");
+
+	s = tcore_plugin_ref_server(plugin);
+	tcore_server_remove_notification_hook(s, on_hook_modem_plugin_added);
+	tcore_server_remove_notification_hook(s, on_hook_modem_plugin_removed);
 }
 
 EXPORT_API struct tcore_plugin_define_desc plugin_define_desc =
