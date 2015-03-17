@@ -1,7 +1,7 @@
 /*
  * tel-plugin-nitz
  *
- * Copyright (c) 2000 - 2013 Samsung Electronics Co., Ltd. All rights reserved.
+ * Copyright (c) 2000 - 2015 Samsung Electronics Co., Ltd. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,8 +31,7 @@
 #include <glib.h>
 #include <vconf.h>
 #include <tcore.h>
-#include <sysman.h>
-
+#include <dd-deviced.h>
 #include "common.h"
 #include "time_update.h"
 #include "citylist.h"
@@ -53,7 +52,7 @@ int nitz_apply_tzfile(const char *tzfilename, gboolean mode_auto)
 
 	snprintf(buf, BUF_SIZE, "%s/%s", PATH_ZONEINFO, tzfilename);
 
-	ret = sysman_set_timezone(buf);
+	ret = deviced_set_timezone(buf);
 	filelog("set (%s) timezone file. ret=%d", buf, ret);
 
 	sync();
@@ -77,7 +76,8 @@ long nitz_get_uptime()
 	return 0;
 }
 
-static gboolean update_time(const TelNetworkNitzInfoNoti *ti, gboolean mode_auto)
+static gboolean update_time(const struct tnoti_network_timeinfo *ti,
+							gboolean mode_auto)
 {
 	struct tm tm_time;
 	time_t tt_gmt_nitz;
@@ -90,6 +90,7 @@ static gboolean update_time(const TelNetworkNitzInfoNoti *ti, gboolean mode_auto
 	tm_time.tm_sec = ti->second;
 	tm_time.tm_min = ti->minute;
 	tm_time.tm_hour = ti->hour;
+	tm_time.tm_wday = ti->wday;
 	tm_time.tm_isdst = ti->dstoff;
 
 	tt_gmt_nitz = timegm(&tm_time);
@@ -106,20 +107,21 @@ static gboolean update_time(const TelNetworkNitzInfoNoti *ti, gboolean mode_auto
 	/*
 	 *  - Apply system time (GMT)
 	 */
-	ret = sysman_set_datetime(tt_gmt_nitz);
+	ret = deviced_set_datetime(tt_gmt_nitz);
 	if (ret < 0) {
-		filelog("sysman_set_datetime(%ld) failed. ret = %d",
+		filelog("deviced_set_datetime(%ld) failed. ret = %d",
 							tt_gmt_nitz, ret);
 		return FALSE;
 	} else {
-		filelog("sysman_set_datetime(%ld) success. ret = %d",
+		filelog("deviced_set_datetime(%ld) success. ret = %d",
 							tt_gmt_nitz, ret);
 	}
 
 	return TRUE;
 }
 
-static gboolean update_timezone(const TelNetworkNitzInfoNoti *ti, gboolean mode_auto)
+static gboolean update_timezone(const struct tnoti_network_timeinfo *ti,
+							gboolean mode_auto)
 {
 	int mcc;
 	char mcc_str[4];
@@ -130,7 +132,7 @@ static gboolean update_timezone(const TelNetworkNitzInfoNoti *ti, gboolean mode_
 	mcc = atoi(mcc_str);
 	dbg("MCC: [%d]", mcc);
 
-	if (mcc > 0) {
+	if (mcc >= 0) {
 		m = nitz_find_tzinfo(mcc, ti->gmtoff, ti->dstoff, ti->isdst);
 		if (m) {
 			dbg("Country: [%s] (ISO 3166)", m->country);
@@ -145,7 +147,8 @@ static gboolean update_timezone(const TelNetworkNitzInfoNoti *ti, gboolean mode_
 	return ret;
 }
 
-gboolean nitz_time_update(const TelNetworkNitzInfoNoti *time_info, gboolean mode_auto)
+gboolean nitz_time_update(const struct tnoti_network_timeinfo *time_info,
+							gboolean mode_auto)
 {
 	if (time_info->year == 0
 			&& time_info->month == 0

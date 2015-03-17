@@ -1,7 +1,7 @@
 /*
  * tel-plugin-nitz
  *
- * Copyright (c) 2000 - 2013 Samsung Electronics Co., Ltd. All rights reserved.
+ * Copyright (c) 2000 - 2015 Samsung Electronics Co., Ltd. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,17 +35,19 @@
 #define PLUGIN_VERSION 1
 #endif
 
-static TcoreHookReturn on_hook_network_timeinfo(TcorePlugin *source,
-			TcoreNotification command,
-			guint data_len, void *data, void *user_data)
+static enum tcore_hook_return on_hook_network_timeinfo(Server *s,
+			CoreObject *source,
+			enum tcore_notification_command command,
+			unsigned int data_len, void *data, void *user_data)
 {
-	TelNetworkNitzInfoNoti *timeinfo = data;
+	struct tnoti_network_timeinfo *timeinfo = data;
 	gboolean flag_auto_update = FALSE;
 
-	filelog("NITZ !! (time(NULL) = %u)", (guint)time(NULL));
-	dbg("+- %04d-%02d-%02d %02d:%02d:%02d",
+	filelog("NITZ !! (time(NULL) = %u)", (unsigned int)time(NULL));
+	dbg("+- %04d-%02d-%02d %02d:%02d:%02d wday=%d",
 			timeinfo->year, timeinfo->month, timeinfo->day,
-			timeinfo->hour, timeinfo->minute, timeinfo->second);
+			timeinfo->hour, timeinfo->minute, timeinfo->second,
+			timeinfo->wday);
 	dbg("+- GMT-offset:%d, DST-offset:%d, is_dst:%d",
 			timeinfo->gmtoff, timeinfo->dstoff, timeinfo->isdst);
 
@@ -59,81 +61,32 @@ static TcoreHookReturn on_hook_network_timeinfo(TcorePlugin *source,
 	return TCORE_HOOK_RETURN_CONTINUE;
 }
 
-static TcoreHookReturn on_hook_modem_plugin_added(Server *s,
-			TcoreServerNotification command,
-			guint data_len, void *data, void *user_data)
-{
-	TcorePlugin *modem_plugin;
-
-	modem_plugin = (TcorePlugin *)data;
-	tcore_check_return_value_assert(NULL != modem_plugin, TCORE_HOOK_RETURN_STOP_PROPAGATION);
-
-	tcore_plugin_add_notification_hook(modem_plugin, TCORE_NOTIFICATION_NETWORK_TIMEINFO,
-					on_hook_network_timeinfo, NULL);
-
-	return TCORE_HOOK_RETURN_CONTINUE;
-}
-
-static TcoreHookReturn on_hook_modem_plugin_removed(Server *s,
-			TcoreServerNotification command,
-			guint data_len, void *data, void *user_data)
-{
-	TcorePlugin *modem_plugin;
-
-	modem_plugin = (TcorePlugin *)data;
-	tcore_check_return_value_assert(NULL != modem_plugin, TCORE_HOOK_RETURN_STOP_PROPAGATION);
-
-	tcore_plugin_remove_notification_hook(modem_plugin, TCORE_NOTIFICATION_NETWORK_TIMEINFO,
-					on_hook_network_timeinfo);
-
-	return TCORE_HOOK_RETURN_CONTINUE;
-}
-
 static gboolean on_load()
 {
 	dbg("Load!!!");
+
 	return TRUE;
 }
 
-static gboolean on_init(TcorePlugin *plugin)
+static gboolean on_init(TcorePlugin *p)
 {
 	Server *s;
-	GSList *list = NULL;
-	TcorePlugin *modem_plugin;
-
-	tcore_check_return_value_assert(NULL != plugin, FALSE);
 
 	dbg("Init!!!");
 
-	s = tcore_plugin_ref_server(plugin);
-	list = tcore_server_get_modem_plugin_list(s);
-	while (list) {	/* Process for pre-loaded Modem Plug-in */
-		modem_plugin = list->data;
-		if ( NULL != modem_plugin)
-			tcore_plugin_add_notification_hook(modem_plugin, TCORE_NOTIFICATION_NETWORK_TIMEINFO,
-					on_hook_network_timeinfo, NULL);
-		list = g_slist_next(list);
-	}
-	g_slist_free(list);
+	s = tcore_plugin_ref_server(p);
+	if (s == NULL)
+		return FALSE;
 
-	/* Register for post-loaded Modem Plug-ins */
-	tcore_server_add_notification_hook(s, TCORE_SERVER_NOTIFICATION_ADDED_MODEM_PLUGIN,
-					on_hook_modem_plugin_added, NULL);
-	tcore_server_add_notification_hook(s, TCORE_SERVER_NOTIFICATION_REMOVED_MODEM_PLUGIN,
-					on_hook_modem_plugin_removed, NULL);
+	tcore_server_add_notification_hook(s, TNOTI_NETWORK_TIMEINFO,
+					on_hook_network_timeinfo, NULL);
+
 	return TRUE;
 }
 
-static void on_unload(TcorePlugin *plugin)
+static void on_unload(TcorePlugin *p)
 {
-	Server *s;
-
-	tcore_check_return_assert(NULL != plugin);
 	dbg("Unload");
-
-	s = tcore_plugin_ref_server(plugin);
-	tcore_server_remove_notification_hook(s, on_hook_modem_plugin_added);
-	tcore_server_remove_notification_hook(s, on_hook_modem_plugin_removed);
 }
 
 EXPORT_API struct tcore_plugin_define_desc plugin_define_desc =

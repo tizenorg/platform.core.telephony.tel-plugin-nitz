@@ -1,7 +1,6 @@
-%define major 3
-%define minor 0
-%define patchlevel 1
-
+%define major 0
+%define minor 1
+%define patchlevel 19
 Name:       tel-plugin-nitz
 Summary:    nitz plugin for telephony
 Version:    %{major}.%{minor}.%{patchlevel}
@@ -15,9 +14,8 @@ BuildRequires:  cmake
 BuildRequires:  pkgconfig(glib-2.0)
 BuildRequires:  pkgconfig(gio-2.0)
 BuildRequires:  pkgconfig(tcore)
-BuildRequires:  pkgconfig(tel-headers)
 BuildRequires:  pkgconfig(vconf)
-BuildRequires:  pkgconfig(sysman)
+BuildRequires:  pkgconfig(deviced)
 
 %description
 nitz plugin for telephony

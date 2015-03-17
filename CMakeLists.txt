@@ -9,7 +9,7 @@ SET(INCLUDEDIR "\${prefix}/include")
 
 # Set required packages
 INCLUDE(FindPkgConfig)
-pkg_check_modules(pkgs REQUIRED glib-2.0 gio-2.0 tcore tel-headers vconf sysman)
+pkg_check_modules(pkgs REQUIRED glib-2.0 gio-2.0 tcore vconf deviced)
 
 FOREACH(flag ${pkgs_CFLAGS})
 	SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")

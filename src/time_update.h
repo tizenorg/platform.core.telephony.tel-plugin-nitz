@@ -1,7 +1,7 @@
 /*
  * tel-plugin-nitz
  *
- * Copyright (c) 2000 - 2013 Samsung Electronics Co., Ltd. All rights reserved.
+ * Copyright (c) 2000 - 2015 Samsung Electronics Co., Ltd. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,6 @@
 
 int nitz_apply_tzfile(const char *tzfilename, gboolean mode_auto);
 long nitz_get_uptime();
-gboolean nitz_time_update(const TelNetworkNitzInfoNoti *time_info, gboolean mode_auto);
+gboolean nitz_time_update(const struct tnoti_network_timeinfo *time_info, gboolean mode_auto);
 
 #endif
