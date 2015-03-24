@@ -4,7 +4,7 @@ PROJECT(nitz-plugin C)
 # INCLUDE(FindPkgConfig)
 SET(PREFIX ${CMAKE_INSTALL_PREFIX})
 SET(EXEC_PREFIX "\${prefix}")
-SET(LIBDIR "\${prefix}/lib")
+SET(LIBDIR ${LIB_INSTALL_DIR})
 SET(INCLUDEDIR "\${prefix}/include")
 
 # Set required packages
@@ -42,4 +42,4 @@ SET_TARGET_PROPERTIES(nitz-plugin PROPERTIES PREFIX "" OUTPUT_NAME nitz-plugin)
 
 # install
 INSTALL(TARGETS nitz-plugin
-		LIBRARY DESTINATION lib/telephony/plugins)
+		LIBRARY DESTINATION ${LIBDIR}/telephony/plugins)
