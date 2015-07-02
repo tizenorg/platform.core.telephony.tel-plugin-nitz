@@ -19,8 +19,10 @@
 #ifndef __NITZ_TIME_H__
 #define __NITZ_TIME_H__
 
-int nitz_apply_tzfile(const char *tzfilename, gboolean mode_auto);
-long nitz_get_uptime();
-gboolean nitz_time_update(const struct tnoti_network_timeinfo *time_info, gboolean mode_auto);
+int nitz_apply_tzfile (const char *tzfilename);
+gboolean nitz_is_auto_timezone (void);
+gboolean nitz_time_update (const struct tnoti_network_timeinfo *time_info, struct nitz_custom_data *data, gint delay);
+GList * nitz_get_tzlist(char *iso, const struct tnoti_network_timeinfo *ti);
+gboolean nitz_set_time (time_t tt_gmt_nitz);
 
 #endif

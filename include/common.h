@@ -22,10 +22,17 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <glib.h>
+#include <gio/gio.h>
+
+#include <unicode/ustring.h>
+#include <unicode/ucal.h>
+
+#ifdef FEATURE_FILE_LOG
 
 /* filelog */
 #ifndef NITZ_LOG_FILE
-#define NITZ_LOG_FILE	"/opt/var/log/nitz.log"
+#define NITZ_LOG_FILE		"/opt/var/log/nitz.log"
 #endif
 
 #ifndef NITZ_LOG_FUNC
@@ -41,5 +48,34 @@
 			fclose(fp); \
 		} \
 	}
+
+#else
+#define filelog(fmt, args...) warn(fmt, ##args);
+#endif
+
+#define NITZ_TIMEZONE_MAX_LEN 64
+
+struct nitz_custom_data {
+	gboolean nitz_updated;
+	gboolean need_fix_zone;
+	gboolean wait_for_icc_card;
+	gboolean wait_for_net_registration;
+
+	char *plmn;
+	GHashTable *mcctable_hash;
+
+	GQueue *nitz_pending_queue;
+	CoreObject *co_network;
+	TcorePlugin *plugin;
+};
+
+typedef enum ConnMode {
+	CONN_MODE_COMPAINION,
+	CONN_MODE_REMOTE,
+	CONN_MODE_STANDALONE,
+	CONN_MODE_UNKNOWN
+} ConnMode;
+
+char * __nitz_get_country_code_for_mcc(char *operator_mcc, struct nitz_custom_data *custom_data);
 
 #endif

@@ -9,13 +9,23 @@ SET(INCLUDEDIR "\${prefix}/include")
 
 # Set required packages
 INCLUDE(FindPkgConfig)
-pkg_check_modules(pkgs REQUIRED glib-2.0 gio-2.0 tcore vconf deviced)
+pkg_check_modules(pkgs REQUIRED
+	glib-2.0
+	tcore
+	vconf
+	alarm-service
+	libxml-2.0
+	icu-i18n
+	capi-system-device
+)
 
 FOREACH(flag ${pkgs_CFLAGS})
 	SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag}")
 ENDFOREACH(flag)
 
-INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/include/)
+INCLUDE_DIRECTORIES(
+	${CMAKE_SOURCE_DIR}/include/
+)
 
 SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
 SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror -Wextra -fvisibility=hidden -fPIC")
@@ -26,13 +36,16 @@ ADD_DEFINITIONS("-DTCORE_LOG_TAG=\"NITZ\"")
 ADD_DEFINITIONS("-DPLUGIN_VERSION=${VERSION}")
 ADD_DEFINITIONS("-DEXPORT_API=__attribute__((visibility(\"default\")))")
 
+IF (TIZEN_FEATURE_NEED_RESTORED_GMT)
+	ADD_DEFINITIONS("-DTIZEN_FEATURE_NEED_RESTORED_GMT")
+ENDIF (TIZEN_FEATURE_NEED_RESTORED_GMT)
+
 MESSAGE(${CMAKE_C_FLAGS})
 MESSAGE(${pkgs_LDFLAGS})
 
 SET(SRCS
 	src/desc-nitz.c
 	src/time_update.c
-	src/citylist.c
 )
 
 # library build
@@ -43,3 +56,5 @@ SET_TARGET_PROPERTIES(nitz-plugin PROPERTIES PREFIX "" OUTPUT_NAME nitz-plugin)
 # install
 INSTALL(TARGETS nitz-plugin
 		LIBRARY DESTINATION ${LIBDIR}/telephony/plugins)
+
+INSTALL(FILES ${CMAKE_SOURCE_DIR}/resources/mcctable.xml DESTINATION /opt/data/etc PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ WORLD_READ)

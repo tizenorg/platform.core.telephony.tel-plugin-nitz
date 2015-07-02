@@ -1,6 +1,7 @@
 %define major 0
 %define minor 1
-%define patchlevel 19
+%define patchlevel 70
+
 Name:       tel-plugin-nitz
 Summary:    nitz plugin for telephony
 Version:    %{major}.%{minor}.%{patchlevel}
@@ -12,10 +13,12 @@ Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
 BuildRequires:  cmake
 BuildRequires:  pkgconfig(glib-2.0)
-BuildRequires:  pkgconfig(gio-2.0)
+BuildRequires:  pkgconfig(libxml-2.0)
+BuildRequires:  pkgconfig(icu-i18n)
 BuildRequires:  pkgconfig(tcore)
 BuildRequires:  pkgconfig(vconf)
-BuildRequires:  pkgconfig(deviced)
+BuildRequires:  pkgconfig(alarm-service)
+BuildRequires:  pkgconfig(capi-system-device)
 
 %description
 nitz plugin for telephony
@@ -28,7 +31,7 @@ versionint=$[%{major} * 1000000 + %{minor} * 1000 + %{patchlevel}]
 cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix} \
 	-DLIB_INSTALL_DIR=%{_libdir} \
 	-DVERSION=$versionint
-make %{?jobs:-j%jobs}
+make %{?_smp_mflags}
 
 %post
 /sbin/ldconfig
@@ -41,6 +44,6 @@ rm -rf %{buildroot}
 
 %files
 %manifest tel-plugin-nitz.manifest
-%defattr(-,root,root,-)
-#%doc COPYING
+%defattr(644,system,system,-)
 %{_libdir}/telephony/plugins/*
+/opt/data/etc/mcctable.xml

@@ -18,6 +18,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <glib.h>
 #include <vconf.h>
@@ -31,39 +32,457 @@
 #include "common.h"
 #include "time_update.h"
 
+#include <libxml/xmlmemory.h>
+#include <libxml/parser.h>
+#include <libxml/tree.h>
+
+#define MCCTABLE_DIR_PATH "/opt/data/etc/mcctable.xml"
+
 #ifndef PLUGIN_VERSION
 #define PLUGIN_VERSION 1
 #endif
 
-static enum tcore_hook_return on_hook_network_timeinfo(Server *s,
-			CoreObject *source,
-			enum tcore_notification_command command,
-			unsigned int data_len, void *data, void *user_data)
-{
-	struct tnoti_network_timeinfo *timeinfo = data;
-	gboolean flag_auto_update = FALSE;
+#define VCONFKEY_WECONN_ALL_CONNECTED	"memory/private/weconn/all_connected"
+#define VCONFKEY_SAP_CONNECTION_TYPE	"memory/private/sap/conn_type"
 
-	filelog("NITZ !! (time(NULL) = %u)", (unsigned int)time(NULL));
-	dbg("+- %04d-%02d-%02d %02d:%02d:%02d wday=%d",
+typedef enum SapConnType {
+	SAP_ALL = 0x00, /* All connectivity */
+	SAP_BT = 0x01, /* BT connectivity */
+	SAP_BLE = 0x02, /* BLE connectivity */
+	SAP_TCP_IP = 0x04, /* TCP connectivity */
+	SAP_USB = 0x08, /* USB connectivity */
+	SAP_MOBILE = 0x10, /* SCS connectivity */
+	SAP_CONNECTIVITY_END = 0xFF /* End of Connectivity */
+} SapConnType;
+
+struct nitz_time_update_s {
+	CoreObject *co_network;
+
+	struct tnoti_network_timeinfo *timeinfo;
+	struct nitz_custom_data *custom_data;
+	time_t start_time;
+};
+
+static void __load_XML(char *docname, char *groupname, void **i_doc, void **i_root_node)
+{
+	xmlDocPtr *doc = (xmlDocPtr *)i_doc;
+	xmlNodePtr *root_node = (xmlNodePtr *)i_root_node;
+
+	dbg("docname:%s, groupname:%s", docname, groupname);
+
+	*doc = xmlParseFile(docname);
+	if (*doc) {
+		*root_node = xmlDocGetRootElement(*doc);
+		if (*root_node) {
+			dbg("*root_node->name:%s", (*root_node)->name);
+			if (0 == xmlStrcmp((*root_node)->name, (const xmlChar *)groupname)) {
+				*root_node = (*root_node)->xmlChildrenNode;
+			} else {
+				xmlFreeDoc(*doc);
+				*doc = NULL;
+				*root_node = NULL;
+			}
+		} else {
+			xmlFreeDoc(*doc);
+			*doc = NULL;
+		}
+	} else
+		err("Cannot parse doc(%s)", docname);
+}
+
+static void __unload_XML(void **i_doc, void **i_root_node)
+{
+	xmlDocPtr *doc = (xmlDocPtr *)i_doc;
+	xmlNodePtr *root_node = (xmlNodePtr *)i_root_node;
+
+	dbg("unloading XML");
+	if (doc && *doc) {
+		xmlFreeDoc(*doc);
+		*doc = NULL;
+		if (root_node)
+			*root_node = NULL;
+	}
+}
+
+char *__nitz_get_country_code_for_mcc(char *operator_mcc, struct nitz_custom_data *data)
+{
+	xmlNodePtr cur = NULL;
+	xmlNode *cur_node = NULL;
+	char *mcc_str = NULL, *iso = NULL;
+	void *xml_doc = NULL, *xml_root_node = NULL;
+
+	dbg("operator_mcc = %s", operator_mcc);
+
+	iso = (char *)g_hash_table_lookup(data->mcctable_hash, operator_mcc);
+	if (iso) {
+		dbg("Found a record in cache (mcc[%s], iso[%s])", operator_mcc, iso ? iso : "");
+		return g_strdup(iso);
+	}
+
+	__load_XML(MCCTABLE_DIR_PATH, "mcctable", &xml_doc, &xml_root_node);
+	if (!xml_root_node) {
+		err("mcctable.xml load error");
+		return NULL;
+	}
+
+	/* Get iso country code from mcctable for mcc */
+	cur = xml_root_node;
+	for (cur_node = cur; cur_node; cur_node = cur_node->next) {
+		if (cur_node->type == XML_ELEMENT_NODE) {
+			mcc_str = (char *)xmlGetProp(cur_node, (const xmlChar *)"mcc");
+			if (g_strcmp0(operator_mcc, mcc_str) == 0) {
+				iso = g_strdup((char *)xmlGetProp(cur_node, (const xmlChar *)"iso"));
+				dbg("Found a record(mcc[%s], iso[%s])", mcc_str, iso ? iso : "");
+				break;
+			}
+		}
+	}
+	__unload_XML(&xml_doc, &xml_root_node);
+	if (iso)
+		g_hash_table_insert(data->mcctable_hash, g_strdup(operator_mcc), g_strdup(iso));
+	return iso;
+}
+
+static enum ConnMode __nitz_get_device_connection_mode(void)
+{
+	int all_connected = FALSE;
+	int sap_conn_type = 0;
+
+#ifdef TIZEN_FEATURE_COMPANION_MODE_ENABLE
+	vconf_get_int(VCONFKEY_WECONN_ALL_CONNECTED, &all_connected);
+	vconf_get_int(VCONFKEY_SAP_CONNECTION_TYPE, &sap_conn_type);
+#endif
+	info("(%s : %d) (%s : %d)", VCONFKEY_WECONN_ALL_CONNECTED, all_connected, VCONFKEY_SAP_CONNECTION_TYPE, sap_conn_type);
+
+	if (!all_connected) {
+		return CONN_MODE_STANDALONE;
+	} else {
+		switch (sap_conn_type) {
+		case SAP_BT:
+			return CONN_MODE_COMPAINION;
+
+		case SAP_MOBILE:
+			return CONN_MODE_REMOTE;
+
+		default:
+		err("unknown type");
+		break;
+		}
+	}
+	return CONN_MODE_UNKNOWN;
+}
+
+static gboolean  _check_area_changed(char *iso)
+{
+	char *saved_iso = NULL;
+	gboolean area_changed = TRUE;
+
+	saved_iso = vconf_get_str(VCONFKEY_TELEPHONY_PRIVATE_NITZ_ISO);
+	if (saved_iso) {
+		info("saved iso:[%s], mcc iso:[%s]", saved_iso, iso);
+		if (g_ascii_strcasecmp(saved_iso, iso) == 0)
+			area_changed = FALSE;
+
+		free(saved_iso);
+	}
+
+	return area_changed;
+}
+
+static void _check_fix_time_zone(struct nitz_custom_data *custom_data)
+{
+	char mcc_str[4] = {0,};
+	char *iso = NULL;
+	int mcc = 0;
+	int icc_card_exist = VCONFKEY_TELEPHONY_SIM_UNKNOWN;
+	enum telephony_network_service_type svc_type = NETWORK_SERVICE_TYPE_UNKNOWN;
+	Server *s = tcore_plugin_ref_server(custom_data->plugin);
+	GList *tz_list = NULL;
+	char *timezone_name = NULL;
+	int tz_count = 0;
+
+	if (!custom_data->need_fix_zone) {
+		info("We don't need to fix timezone");
+		return;
+	}
+
+	if (!nitz_is_auto_timezone()) {
+		info("We don't need to fix timezone in Manual timezone mode");
+		return;
+	}
+
+	vconf_get_int(VCONFKEY_TELEPHONY_SIM_SLOT, &icc_card_exist);
+	if (icc_card_exist != VCONFKEY_TELEPHONY_SIM_INSERTED) {
+		if (tcore_server_get_modems_count(s) == 2) {
+			int icc_card2_exist = VCONFKEY_TELEPHONY_SIM_UNKNOWN;
+			vconf_get_int(VCONFKEY_TELEPHONY_SIM_SLOT2, &icc_card2_exist);
+			if (icc_card2_exist != VCONFKEY_TELEPHONY_SIM_INSERTED) {
+				info("We don't need to fix timezone. Icc card is not exist.");
+				custom_data->wait_for_icc_card = TRUE;
+				return;
+			}
+		} else {
+			info("We don't need to fix timezone. Icc card is not exist.");
+			custom_data->wait_for_icc_card = TRUE;
+			return;
+		}
+	}
+
+	tcore_network_get_service_type(custom_data->co_network, &svc_type);
+	if (svc_type <= NETWORK_SERVICE_TYPE_SEARCH) {
+		info("We don't need to fix timezone. Not registered network yet");
+		custom_data->wait_for_net_registration = TRUE;
+		return;
+	} else {
+		custom_data->wait_for_net_registration = FALSE;
+	}
+
+	memcpy(mcc_str, custom_data->plmn, 3);
+	mcc = atoi(mcc_str);
+	iso = __nitz_get_country_code_for_mcc(mcc_str, custom_data);
+	if (iso) {
+		tz_list = nitz_get_tzlist(iso, NULL);
+		tz_count =  g_list_length(tz_list);
+		dbg("tz_count - %d", tz_count);
+		if (tz_count > 0) {
+			if (_check_area_changed(iso)) {
+				timezone_name = tz_list->data;
+				if (tz_count > 1) {
+					info("Multi timezone, Can not select (Need gmtoff, dmtoff, ...");
+				} else {
+					info("Single timezone. Apply (mcc:[%d] iso:[%s] zone:[%s])", mcc, iso, timezone_name);
+					nitz_apply_tzfile(timezone_name);
+				}
+			} else {
+				info("Same Area. Do not change timezone now");
+			}
+			goto EXIT;
+		} else {
+			info("timezone not found for mcc[%d] and iso[%s]", mcc, iso);
+		}
+	} else {
+		dbg("country code is NULL for mcc %d", mcc);
+	}
+
+EXIT:
+	g_list_free_full(tz_list, g_free);
+	g_free(iso);
+}
+
+static gboolean _update_network_timeinfo(gpointer user_data)
+{
+	struct nitz_time_update_s *time_update = user_data;
+	struct tnoti_network_timeinfo *timeinfo = NULL;
+	struct nitz_custom_data *custom_data = NULL;
+	time_t current_time = 0;
+	gint delay = 0;
+
+	if  (!time_update)
+		return FALSE;
+
+	if (nitz_is_auto_timezone()) {
+		/* Time update delay is calculated only for Automatic time update mode.
+		 * For manual time update mode, we can't rely on system time for current time to derive offset/delay
+		 */
+		time(&current_time);
+		delay = current_time - time_update->start_time;
+		info("Enqueued_timestamp[%u] Dequeued_timestamp[%u] delay[%d]", time_update->start_time, current_time, delay);
+	}
+
+	timeinfo = time_update->timeinfo;
+	custom_data = time_update->custom_data;
+	custom_data->nitz_updated = TRUE;
+	custom_data->need_fix_zone = FALSE;
+
+	info("[TIMESTAMP][STEP3-Processing] %04d-%02d-%02d %02d:%02d:%02d wday=%d GMT:%d, dstoff:%d, is_dst:%d",
 			timeinfo->year, timeinfo->month, timeinfo->day,
 			timeinfo->hour, timeinfo->minute, timeinfo->second,
-			timeinfo->wday);
-	dbg("+- GMT-offset:%d, DST-offset:%d, is_dst:%d",
-			timeinfo->gmtoff, timeinfo->dstoff, timeinfo->isdst);
+			timeinfo->wday, timeinfo->gmtoff, timeinfo->dstoff, timeinfo->isdst);
 
-	vconf_get_bool(VCONFKEY_SETAPPL_STATE_AUTOMATIC_TIME_UPDATE_BOOL,
-							&flag_auto_update);
-	if (flag_auto_update == FALSE)
-		dbg("manual time update mode");
+	if (CONN_MODE_COMPAINION == __nitz_get_device_connection_mode()) {
+		g_free(timeinfo);
+		g_free(time_update);
+		info("[TIMESTAMP] device is in companion mode! ignore NITZ update");
+		return FALSE;
+	}
 
-	nitz_time_update(timeinfo, flag_auto_update);
+	if (!custom_data->co_network)
+		custom_data->co_network = time_update->co_network;
+
+	if (strlen(timeinfo->plmn) == 0 && custom_data->plmn != NULL) {
+		/* Updated PLMN from custom_data incase when received PLMN is empty. */
+		info("Received PLMN is empty, so use cached PLMN");
+		g_strlcpy(timeinfo->plmn, custom_data->plmn, strlen(custom_data->plmn)+1);
+	}
+
+	nitz_time_update(timeinfo, custom_data, delay);
+
+	g_free(timeinfo);
+	g_free(time_update);
+
+	return FALSE;
+}
+
+static gboolean _process_nitz_pending(gpointer user_data)
+{
+	struct nitz_custom_data *custom_data = user_data;
+	struct nitz_time_update_s *time_update = NULL;
+	struct tnoti_network_timeinfo *timeinfo = NULL;
+
+	if (!custom_data)
+		return FALSE;
+
+	while (1) {
+		time_update = g_queue_pop_head(custom_data->nitz_pending_queue);
+		if (!time_update)
+			break;
+
+		timeinfo = time_update->timeinfo;
+		if (!timeinfo)
+			continue;
+
+		if (g_queue_is_empty(custom_data->nitz_pending_queue))
+			break;
+
+		info("[TIMESTAMP][STEP2-Discard] %04d-%02d-%02d %02d:%02d:%02d wday=%d GMT:%d, dstoff:%d, is_dst:%d",
+				timeinfo->year, timeinfo->month, timeinfo->day,
+				timeinfo->hour, timeinfo->minute, timeinfo->second,
+				timeinfo->wday, timeinfo->gmtoff, timeinfo->dstoff, timeinfo->isdst);
+
+		g_free(timeinfo);
+		g_free(time_update);
+	}
+
+	_update_network_timeinfo(time_update);
+	return FALSE;
+}
+
+static enum tcore_hook_return on_hook_network_regist(Server *s,
+	CoreObject *source, enum tcore_notification_command command,
+	unsigned int data_len, void *data, void *user_data)
+{
+	struct nitz_custom_data *custom_data = user_data;
+	struct tnoti_network_registration_status *info = data;
+
+	if (!custom_data->co_network)
+		custom_data->co_network = source;
+
+	/*
+	 * Handle MCC changed scenario -
+	 * If MCC is changed and network is registered, update timezone
+	 */
+	if ((info->service_type >= NETWORK_SERVICE_TYPE_SEARCH)
+		&& (custom_data->wait_for_net_registration))
+			_check_fix_time_zone(custom_data);
 
 	return TCORE_HOOK_RETURN_CONTINUE;
 }
 
+static enum tcore_hook_return on_hook_network(Server *s, CoreObject *source,
+	enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
+{
+	struct nitz_custom_data *custom_data = user_data;
+	struct tnoti_network_change *info = data;
+	gboolean is_mcc_changed = FALSE;
+
+	if (!info || strlen(info->plmn) == 0) {
+		info("Invalid data");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
+
+	if (!custom_data->co_network)
+		custom_data->co_network = source;
+
+	/*
+	 * Handle MCC changed scenario -
+	 * If MCC is changed and network is registered, update timezone
+	 */
+	if ((custom_data->plmn && strncmp(info->plmn, custom_data->plmn, 3)) || (!custom_data->plmn)) {
+		info("MCC change (%s) -> (%s)", custom_data->plmn ? custom_data->plmn : "", info->plmn);
+		g_free(custom_data->plmn);
+		custom_data->plmn = g_strdup(info->plmn);
+		is_mcc_changed = TRUE;
+	}
+
+	if (is_mcc_changed) {
+		if (CONN_MODE_COMPAINION == __nitz_get_device_connection_mode()) {
+			info("device is in companion mode! ignore MCC change");
+		} else {
+			custom_data->need_fix_zone = TRUE;
+			_check_fix_time_zone(custom_data);
+		}
+	}
+
+	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+static enum tcore_hook_return on_hook_network_timeinfo(Server *s, CoreObject *source, enum tcore_notification_command command, unsigned int data_len, void *data, void *user_data)
+{
+	struct nitz_time_update_s *time_update;
+	struct tnoti_network_timeinfo *timeinfo = data;
+	struct nitz_custom_data *custom_data = user_data;
+
+	filelog("NITZ !! (time(NULL) = %u)", (unsigned int)time(NULL));
+
+	info("[TIMESTAMP][STEP1-AddQueue] %04d-%02d-%02d %02d:%02d:%02d wday=%d GMT:%d, dstoff:%d, is_dst:%d",
+			timeinfo->year, timeinfo->month, timeinfo->day,
+			timeinfo->hour, timeinfo->minute, timeinfo->second,
+			timeinfo->wday, timeinfo->gmtoff, timeinfo->dstoff, timeinfo->isdst);
+
+	/* Allocate memory */
+	time_update = g_try_malloc0(sizeof(struct nitz_time_update_s));
+	if (time_update == NULL) {
+		err("Memory allocation failed");
+		return TCORE_HOOK_RETURN_CONTINUE;
+	}
+
+	time_update->custom_data = custom_data;
+	time_update->timeinfo = g_memdup(timeinfo, sizeof(struct tnoti_network_timeinfo));
+	time_update->co_network = source;
+
+	if (g_queue_is_empty(custom_data->nitz_pending_queue)) {
+		info("No pending NITZ");
+		g_idle_add(_process_nitz_pending, custom_data);
+	}
+	info("Add nitz info to queue");
+	time(&time_update->start_time);
+	g_queue_push_tail(custom_data->nitz_pending_queue, time_update);
+
+	return TCORE_HOOK_RETURN_CONTINUE;
+}
+
+static void on_vconf_sim_slot_state(keynode_t *node, void *user_data)
+{
+	int icc_card_exist = VCONFKEY_TELEPHONY_SIM_UNKNOWN;
+	struct nitz_custom_data *data = user_data;
+	Server *s = tcore_plugin_ref_server(data->plugin);
+
+	vconf_get_int(VCONFKEY_TELEPHONY_SIM_SLOT, &icc_card_exist);
+	if (icc_card_exist == VCONFKEY_TELEPHONY_SIM_INSERTED)
+		goto UPDATE;
+	else {
+		if (tcore_server_get_modems_count(s) == 2) {
+			int icc_card2_exist = VCONFKEY_TELEPHONY_SIM_UNKNOWN;
+			vconf_get_int(VCONFKEY_TELEPHONY_SIM_SLOT2, &icc_card2_exist);
+			if (icc_card2_exist == VCONFKEY_TELEPHONY_SIM_INSERTED)
+				goto UPDATE;
+		}
+		return;
+	}
+UPDATE:
+	{
+		struct nitz_custom_data *data = user_data;
+		if (data->wait_for_icc_card) {
+			info("ICC CARD INSERTED. check timezone again");
+			_check_fix_time_zone(user_data);
+			data->wait_for_icc_card = FALSE;
+		}
+	}
+}
+
 static gboolean on_load()
 {
-	dbg("Load!!!");
+	dbg("i'm load!");
 
 	return TRUE;
 }
@@ -71,26 +490,78 @@ static gboolean on_load()
 static gboolean on_init(TcorePlugin *p)
 {
 	Server *s;
+	struct nitz_custom_data *data;
+	guint modems_count;
 
-	dbg("Init!!!");
-
-	s = tcore_plugin_ref_server(p);
-	if (s == NULL)
+	if (!p)
 		return FALSE;
 
-	tcore_server_add_notification_hook(s, TNOTI_NETWORK_TIMEINFO,
-					on_hook_network_timeinfo, NULL);
+	dbg("i'm init!");
+
+	s = tcore_plugin_ref_server(p);
+	if (!s)
+		return FALSE;
+
+	data = calloc(sizeof(struct nitz_custom_data), 1);
+	if (!data)
+		return FALSE;
+
+	data->plugin = p;
+	tcore_plugin_link_user_data(p, data);
+
+	data->nitz_updated = FALSE;
+	data->need_fix_zone = FALSE;
+	data->mcctable_hash = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+	data->nitz_pending_queue = g_queue_new();
+	g_queue_init(data->nitz_pending_queue);
+
+	tcore_server_add_notification_hook(s, TNOTI_NETWORK_CHANGE, on_hook_network, data);
+	tcore_server_add_notification_hook(s, TNOTI_NETWORK_REGISTRATION_STATUS, on_hook_network_regist, data);
+	tcore_server_add_notification_hook(s, TNOTI_NETWORK_TIMEINFO, on_hook_network_timeinfo, data);
+
+	vconf_notify_key_changed(VCONFKEY_TELEPHONY_SIM_SLOT, on_vconf_sim_slot_state, data);
+
+	modems_count = tcore_server_get_modems_count(s);
+	dbg("get modems count - %d", modems_count);
+	if (modems_count == 2)
+		vconf_notify_key_changed(VCONFKEY_TELEPHONY_SIM_SLOT2, on_vconf_sim_slot_state, data);
 
 	return TRUE;
 }
 
 static void on_unload(TcorePlugin *p)
 {
-	dbg("Unload");
+	struct nitz_custom_data *data;
+	Server *s;
+	guint modems_count;
+
+	dbg("i'm unload");
+
+	data = tcore_plugin_ref_user_data(p);
+	if (!data)
+		return;
+
+	if (data->plmn)
+		g_free(data->plmn);
+
+	if (data->mcctable_hash)
+		g_hash_table_destroy(data->mcctable_hash);
+
+	s = tcore_plugin_ref_server(p);
+	tcore_server_remove_notification_hook(s, on_hook_network);
+	tcore_server_remove_notification_hook(s, on_hook_network_regist);
+	tcore_server_remove_notification_hook(s, on_hook_network_timeinfo);
+
+	vconf_ignore_key_changed(VCONFKEY_TELEPHONY_SIM_SLOT, on_vconf_sim_slot_state);
+	modems_count = tcore_server_get_modems_count(s);
+	dbg("get modems count - %d", modems_count);
+	if (modems_count == 2)
+		vconf_ignore_key_changed(VCONFKEY_TELEPHONY_SIM_SLOT2, on_vconf_sim_slot_state);
+
+	free(data);
 }
 
-EXPORT_API struct tcore_plugin_define_desc plugin_define_desc =
-{
+EXPORT_API struct tcore_plugin_define_desc plugin_define_desc = {
 	.name = "NITZ",
 	.priority = TCORE_PLUGIN_PRIORITY_MID,
 	.version = PLUGIN_VERSION,
