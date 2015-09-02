@@ -53,6 +53,7 @@
 #define filelog(fmt, args...) warn(fmt, ##args);
 #endif
 
+#define NITZ_TIMEZONE_SELECT_WAITING_TIMEOUT 20
 #define NITZ_TIMEZONE_MAX_LEN 64
 
 struct nitz_custom_data {
@@ -64,6 +65,7 @@ struct nitz_custom_data {
 	char *plmn;
 	GHashTable *mcctable_hash;
 
+	guint timezone_sel_timer_id;
 	GQueue *nitz_pending_queue;
 	CoreObject *co_network;
 	TcorePlugin *plugin;

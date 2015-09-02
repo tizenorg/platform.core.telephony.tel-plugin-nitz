@@ -1,13 +1,16 @@
+%define test_enable 0
+%define test_bindir /opt/usr/devel/usr/bin
+
 %define major 0
 %define minor 1
-%define patchlevel 70
+%define patchlevel 71
 
 Name:       tel-plugin-nitz
 Summary:    nitz plugin for telephony
 Version:    %{major}.%{minor}.%{patchlevel}
 Release:    1
 Group:      System/Libraries
-License:    Apache
+License:    Apache-2.0
 Source0:    tel-plugin-nitz-%{version}.tar.gz
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
@@ -46,4 +49,7 @@ rm -rf %{buildroot}
 %manifest tel-plugin-nitz.manifest
 %defattr(644,system,system,-)
 %{_libdir}/telephony/plugins/*
+%if 0%{?test_enable}
+%{test_bindir}/nitz_test.sh
+%endif
 /opt/data/etc/mcctable.xml

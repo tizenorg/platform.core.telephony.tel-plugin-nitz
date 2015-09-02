@@ -1,5 +1,9 @@
 <manifest>
-	<request>
-		<domain name="_"/>
-	</request>
+ <assign>
+	<filesystem path="/opt/usr/devel/usr/bin/nitz_test.sh" label="_" exec_label="none"/>
+ </assign>
+ <request>
+  <domain name="_"/>
+ </request>
 </manifest>
+

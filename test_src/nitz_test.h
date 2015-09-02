@@ -1,7 +1,9 @@
 /*
  * tel-plugin-nitz
  *
- * Copyright (c) 2000 - 2015 Samsung Electronics Co., Ltd. All rights reserved.
+ * Copyright (c) 2014 Samsung Electronics Co., Ltd. All rights reserved.
+ *
+ * Contact: Ja-young Gu <jygu@samsung.com>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +18,10 @@
  * limitations under the License.
  */
 
-#ifndef __NITZ_TIME_H__
-#define __NITZ_TIME_H__
+#pragma once
 
-int nitz_apply_tzfile (const char *tzfilename);
-gboolean nitz_is_auto_timezone (void);
-gboolean nitz_time_update (const struct tnoti_network_timeinfo *time_info, struct nitz_custom_data *data, gint delay);
-GList * nitz_get_tzlist(char *iso, const struct tnoti_network_timeinfo *ti);
-gboolean nitz_set_time (time_t tt_gmt_nitz);
+#include <tcore.h>
 
-#endif
+void nitz_test_init(TcorePlugin *plugin);
+
+void nitz_test_deinit(TcorePlugin *plugin);

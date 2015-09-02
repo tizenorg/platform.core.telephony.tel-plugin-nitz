@@ -55,6 +55,37 @@ gboolean nitz_is_auto_timezone(void)
 	}
 }
 
+gboolean nitz_is_iso_changed(char *iso)
+{
+	char *saved_iso = NULL;
+	gboolean area_changed = TRUE;
+
+	saved_iso = vconf_get_str (VCONFKEY_TELEPHONY_NITZ_ISO);
+	if (saved_iso) {
+		info("saved iso:[%s], mcc iso:[%s]", saved_iso, iso);
+		if (g_ascii_strcasecmp(saved_iso, iso) == 0) {
+			area_changed = FALSE;
+		}
+		free(saved_iso);
+	}
+	return area_changed;
+}
+
+void nitz_set_iso(char *iso)
+{
+	int ret = 0;
+
+	if (!iso)
+		return;
+
+	ret = vconf_set_str (VCONFKEY_TELEPHONY_NITZ_ISO, iso);
+	if (ret < 0) {
+		warn("Fail to save iso:[%s]. ret=%d", iso, ret);
+	} else {
+		info("iso saved:[%s]", iso);
+	}
+}
+
 static int nitz_get_uptime(void)
 {
 	struct sysinfo sys_info;
@@ -67,11 +98,11 @@ static int nitz_get_uptime(void)
 	return 0;
 }
 
-gboolean nitz_set_time(time_t new_time)
+gboolean nitz_set_time(struct timespec newtime, struct timespec curtime)
 {
 	int ret = 0;
 
-	vconf_set_int(VCONFKEY_TELEPHONY_NITZ_GMT, new_time);
+	vconf_set_int(VCONFKEY_TELEPHONY_NITZ_GMT, newtime.tv_sec);
 	vconf_set_int(VCONFKEY_TELEPHONY_NITZ_EVENT_GMT, nitz_get_uptime());
 
 	if (!nitz_is_auto_timezone()) {
@@ -82,18 +113,19 @@ gboolean nitz_set_time(time_t new_time)
 	/*
 	 *  - Apply system time(GMT)
 	 */
-	info("[TIMESTAMP][Before] NITZ GMT Time = %ld", new_time);
+	info ("[TIMESTAMP][Before] New Time[secs = %lu, nsecs = %lu], Current Time[secs = %lu, nsecs = %lu]",
+		newtime.tv_sec, newtime.tv_nsec, curtime.tv_sec, curtime.tv_nsec);
 
 	/* Acquire lock */
 	ret = device_power_request_lock(POWER_LOCK_CPU, 0);
 	if (ret < 0)
 		err("ret : (0x%x)", ret);
 
-	ret = alarmmgr_set_systime(new_time);
-	if (ret < 0)
-		info("[TIMESTAMP] alarmmgr_set_systime fail. (ret=%d)", ret);
-	else
-		info("[TIMESTAMP][After] alarm_set_time(%ld) success", new_time);
+	if (alarmmgr_set_systime_with_propagation_delay(newtime, curtime) != ALARMMGR_RESULT_SUCCESS) {
+		info ("[TIMESTAMP] alarmmgr_set_systime_with_propagation_delay fail. (ret=%d)", ret);
+	} else {
+		info ("[TIMESTAMP][After] alarmmgr_set_systime_with_propagation_delay success");
+	}
 
 	/* Release lock */
 	ret = device_power_release_lock(POWER_LOCK_CPU);
@@ -108,14 +140,27 @@ gboolean nitz_apply_tzfile(const char *tzfilename)
 	char current_tz[BUF_SIZE] = {0, };
 	int ret = -1;
 	ssize_t len;
+	char *current = NULL;
 
 	if (!tzfilename) {
 		err("tzfilename is NULL");
 		return FALSE;
 	}
 
+	current = vconf_get_str(VCONFKEY_TELEPHONY_NITZ_ZONE);
+	if (current) {
+		if (g_strcmp0(tzfilename, current)) {
+			ret = vconf_set_str (VCONFKEY_TELEPHONY_NITZ_ZONE, tzfilename);
+		} else {
+			dbg("Same timezone - current[%s], tzfilename[%s]", current, tzfilename);
+		}
+		free(current);
+	} else {
+		ret = vconf_set_str (VCONFKEY_TELEPHONY_NITZ_ZONE, tzfilename);
+	}
+
 	if (!nitz_is_auto_timezone()) {
-		info("[TIMESTAMP] Automatic time update was disabled. We don't need to set time");
+		info("[TIMESTAMP] Automatic time update was disabled. We don't need to set timezone");
 		return FALSE;
 	}
 
@@ -169,7 +214,7 @@ static gboolean __update_timezone_by_offset(const struct tnoti_network_timeinfo 
 	gboolean ret = FALSE;
 	gboolean found = FALSE;
 
-	tz_list = nitz_get_tzlist(iso, ti);
+	tz_list = nitz_get_tzlist_by_offset(iso, ti);
 	tz_count = g_list_length(tz_list);
 	if (tz_count == 1) {
 		timezone_name = tz_list ? tz_list->data : NULL;
@@ -205,20 +250,22 @@ static gboolean __update_timezone_by_offset(const struct tnoti_network_timeinfo 
 		}
 	}
 
-	if (found)
-		ret = nitz_apply_tzfile(timezone_name);
-	else
+	if (found) {
+		ret = nitz_apply_tzfile (timezone_name);
+		nitz_set_iso(iso);
+	} else {
 		info("[TIMESTAMP] Fail to find timezone");
+	}
 
 	g_list_free_full(tz_list, g_free);
 	return ret;
 }
 
 static gboolean __update_time(const struct tnoti_network_timeinfo *ti,
-	struct nitz_custom_data *data, gint delay)
+	struct nitz_custom_data *data, struct timespec curtime)
 {
 	struct tm tm_time;
-	time_t tt_gmt_nitz;
+	struct timespec newtime = {0,};
 
 	memset(&tm_time, 0, sizeof(struct tm));
 	tm_time.tm_year = ti->year - 1900 + 2000;
@@ -230,20 +277,12 @@ static gboolean __update_time(const struct tnoti_network_timeinfo *ti,
 	tm_time.tm_wday = ti->wday;
 	tm_time.tm_isdst = ti->dstoff;
 
-	tt_gmt_nitz = timegm(&tm_time)+delay;
-#ifdef TIZEN_FEATURE_NEED_RESTORED_GMT
-	/*
-	 * Need to set GMT+0 time.
-	 * but, in case of IMC-modem, CP send the time applied GMT.(e.g., GMT+9 in Korea)
-	 * so, restore GMT+0 time.
-	 */
-	tt_gmt_nitz -= ti->gmtoff * 60;
-#endif
-
-	return nitz_set_time(tt_gmt_nitz);
+	newtime.tv_sec = timegm (&tm_time);
+	return nitz_set_time(newtime, curtime);
 }
 
-static gboolean __update_timezone(const struct tnoti_network_timeinfo *ti, struct nitz_custom_data *data)
+static gboolean __update_timezone(const struct tnoti_network_timeinfo *ti,
+	struct nitz_custom_data *data)
 {
 	int mcc = -1;
 	char mcc_str[4] = {0,};
@@ -252,6 +291,9 @@ static gboolean __update_timezone(const struct tnoti_network_timeinfo *ti, struc
 	memcpy(mcc_str, ti->plmn, 3);
 	mcc = atoi(mcc_str);
 
+	/*
+	 * Find tzfile
+	 */
 	if (mcc >= 0) {
 		char *iso = __nitz_get_country_code_for_mcc(mcc_str, data);
 		ret = __update_timezone_by_offset(ti, iso);
@@ -261,7 +303,54 @@ static gboolean __update_timezone(const struct tnoti_network_timeinfo *ti, struc
 	return ret;
 }
 
-GList *nitz_get_tzlist(char *iso, const struct tnoti_network_timeinfo *ti)
+GList * nitz_get_tzlist(char *iso)
+{
+	char* timezone_name = 0;
+	UEnumeration* enum_tz = 0;
+	UErrorCode ec = U_ZERO_ERROR;
+	const UChar* timezone_id = 0;
+	int timezone_id_len = 0;
+	int offset = 0;
+	gboolean in_dst = 0;
+	GList *tz_list = NULL;
+	UCalendar *cal = NULL;
+	unsigned int offset_hash = 0;
+	gboolean dup_check[48][2]; // offset*2, dst
+
+	enum_tz = ucal_openTimeZoneIDEnumeration(UCAL_ZONE_TYPE_CANONICAL, iso, NULL, &ec);
+	memset(dup_check, FALSE, sizeof(dup_check));
+
+	while (1) {
+		if (enum_tz == NULL) {
+			break;
+		}
+		timezone_id = uenum_unext(enum_tz, &timezone_id_len, &ec);
+		if (timezone_id == NULL)
+			break;
+
+		cal = ucal_open(timezone_id, u_strlen(timezone_id), uloc_getDefault(), UCAL_TRADITIONAL, &ec);
+		in_dst = ucal_inDaylightTime(cal, &ec);
+		offset = ucal_get(cal, UCAL_ZONE_OFFSET, &ec);
+		offset_hash = (offset/1800000) + 24;
+		ucal_close(cal);
+
+		dbg("TZ DST:[%d] TZ offset:[%d] offset_hash:[%d]", in_dst, offset, offset_hash);
+		if (dup_check[offset_hash][in_dst] == TRUE) {
+			dbg("Ignore Duplicated");
+			continue;
+		}
+		dup_check[offset_hash][in_dst] = TRUE;
+
+		timezone_name = (char *)g_malloc0(NITZ_TIMEZONE_MAX_LEN);
+		u_UCharsToChars(timezone_id, timezone_name, NITZ_TIMEZONE_MAX_LEN);
+		tz_list = g_list_append(tz_list, timezone_name);
+		info("[TIMESTAMP] ISO:[%s] offset:[%d], Available TZ:[%s]", iso, offset, timezone_name);
+	}
+	uenum_close(enum_tz);
+	return tz_list;
+}
+
+GList *nitz_get_tzlist_by_offset(char *iso, const struct tnoti_network_timeinfo *ti)
 {
 	char *timezone_name = 0;
 	UEnumeration *enum_tz = 0;
@@ -278,7 +367,8 @@ GList *nitz_get_tzlist(char *iso, const struct tnoti_network_timeinfo *ti)
 		dbg("offset = %d", offset);
 		enum_tz = ucal_openTimeZoneIDEnumeration(UCAL_ZONE_TYPE_CANONICAL, iso, &offset, &ec);
 	} else {
-		enum_tz = ucal_openTimeZoneIDEnumeration(UCAL_ZONE_TYPE_CANONICAL, iso, NULL, &ec);
+		err("Invalid offset");
+		return NULL;
 	}
 
 	while (1) {
@@ -299,7 +389,7 @@ GList *nitz_get_tzlist(char *iso, const struct tnoti_network_timeinfo *ti)
 }
 
 gboolean nitz_time_update(const struct tnoti_network_timeinfo *time_info,
-	struct nitz_custom_data *data, gint delay)
+	struct nitz_custom_data *data, struct timespec curtime)
 {
 	gboolean ret_time, ret_tz;
 
@@ -320,7 +410,7 @@ gboolean nitz_time_update(const struct tnoti_network_timeinfo *time_info,
 	 *	1. Time
 	 *	2. Timezone
 	 */
-	ret_time = __update_time(time_info, data, delay);
+	ret_time = __update_time(time_info, data, curtime);
 	ret_tz = __update_timezone(time_info, data);
 
 	if (ret_time || ret_tz)
