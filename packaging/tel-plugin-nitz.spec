@@ -3,7 +3,7 @@
 
 %define major 0
 %define minor 1
-%define patchlevel 71
+%define patchlevel 72
 
 Name:       tel-plugin-nitz
 Summary:    nitz plugin for telephony

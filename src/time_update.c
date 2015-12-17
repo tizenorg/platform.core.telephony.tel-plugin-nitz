@@ -315,7 +315,7 @@ GList * nitz_get_tzlist(char *iso)
 	GList *tz_list = NULL;
 	UCalendar *cal = NULL;
 	unsigned int offset_hash = 0;
-	gboolean dup_check[48][2]; // offset*2, dst
+	gboolean dup_check[52][2]; /* [offset*2][dst], offset max : GMT+13 */
 
 	enum_tz = ucal_openTimeZoneIDEnumeration(UCAL_ZONE_TYPE_CANONICAL, iso, NULL, &ec);
 	memset(dup_check, FALSE, sizeof(dup_check));
@@ -334,9 +334,8 @@ GList * nitz_get_tzlist(char *iso)
 		offset_hash = (offset/1800000) + 24;
 		ucal_close(cal);
 
-		dbg("TZ DST:[%d] TZ offset:[%d] offset_hash:[%d]", in_dst, offset, offset_hash);
 		if (dup_check[offset_hash][in_dst] == TRUE) {
-			dbg("Ignore Duplicated");
+			info("Ignore Duplicated! OFFSET:[%d] DST:[%d] Hash:[%d]", offset, in_dst, offset_hash);
 			continue;
 		}
 		dup_check[offset_hash][in_dst] = TRUE;
@@ -344,7 +343,7 @@ GList * nitz_get_tzlist(char *iso)
 		timezone_name = (char *)g_malloc0(NITZ_TIMEZONE_MAX_LEN);
 		u_UCharsToChars(timezone_id, timezone_name, NITZ_TIMEZONE_MAX_LEN);
 		tz_list = g_list_append(tz_list, timezone_name);
-		info("[TIMESTAMP] ISO:[%s] offset:[%d], Available TZ:[%s]", iso, offset, timezone_name);
+		info("[TIMESTAMP] ISO:[%s] OFFSET:[%d] DST:[%d] TZ:[%s] Hash:[%d]", iso, offset, in_dst, timezone_name, offset_hash);
 	}
 	uenum_close(enum_tz);
 	return tz_list;

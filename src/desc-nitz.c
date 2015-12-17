@@ -309,6 +309,7 @@ static void _check_fix_time_zone(struct nitz_custom_data *custom_data)
 					nitz_apply_tzfile (timezone_name);
 					_stop_nitz_waiting(custom_data);
 				}
+				nitz_set_iso(iso);
 			} else {
 				info("Same Area. Do not change timezone now");
 			}
@@ -332,7 +333,6 @@ static void _check_fix_time_zone(struct nitz_custom_data *custom_data)
 	if (mcc >= 0) {
 		info("Cannot find. Timezone for mcc:[%d]. Ask to user", mcc);
 		_wait_nitz_and_timezone_select_by_user(custom_data);
-		nitz_set_iso(iso);
 	}
 EXIT:
 	g_list_free_full(tz_list, g_free);
