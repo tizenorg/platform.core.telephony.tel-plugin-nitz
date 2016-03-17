@@ -3,7 +3,7 @@
 
 %define major 0
 %define minor 1
-%define patchlevel 72
+%define patchlevel 73
 
 Name:       tel-plugin-nitz
 Summary:    nitz plugin for telephony
@@ -14,6 +14,11 @@ License:    Apache-2.0
 Source0:    tel-plugin-nitz-%{version}.tar.gz
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
+
+%if "%{profile}" == "tv"
+ExcludeArch: %{arm} %ix86 x86_64
+%endif
+
 BuildRequires:  cmake
 BuildRequires:  pkgconfig(glib-2.0)
 BuildRequires:  pkgconfig(libxml-2.0)
