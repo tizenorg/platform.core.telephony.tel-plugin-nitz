@@ -3,7 +3,7 @@
 
 %define major 0
 %define minor 1
-%define patchlevel 73
+%define patchlevel 74
 
 Name:       tel-plugin-nitz
 Summary:    nitz plugin for telephony
@@ -52,7 +52,7 @@ rm -rf %{buildroot}
 
 %files
 %manifest tel-plugin-nitz.manifest
-%defattr(644,system,system,-)
+%defattr(644,root,root,-)
 %{_libdir}/telephony/plugins/*
 %if 0%{?test_enable}
 %{test_bindir}/nitz_test.sh
