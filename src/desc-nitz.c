@@ -135,10 +135,15 @@ char *__nitz_get_country_code_for_mcc(char *operator_mcc, struct nitz_custom_dat
 		if (cur_node->type == XML_ELEMENT_NODE) {
 			mcc_str = (char *)xmlGetProp(cur_node, (const xmlChar *)"mcc");
 			if (g_strcmp0(operator_mcc, mcc_str) == 0) {
-				iso = g_strdup((char *)xmlGetProp(cur_node, (const xmlChar *)"iso"));
+				char *temp_iso = NULL;
+				temp_iso = (char *)xmlGetProp(cur_node, (const xmlChar *)"iso");
+				iso = g_strdup(temp_iso);
 				dbg("Found a record(mcc[%s], iso[%s])", mcc_str, iso ? iso : "");
+				xmlFree(mcc_str);
+				xmlFree(temp_iso);
 				break;
 			}
+			xmlFree(mcc_str);
 		}
 	}
 	__unload_XML(&xml_doc, &xml_root_node);
