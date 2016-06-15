@@ -88,7 +88,7 @@ void nitz_set_iso(char *iso)
 
 static int nitz_get_uptime(void)
 {
-	struct sysinfo sys_info;
+	struct sysinfo sys_info = {0,};
 
 	if (sysinfo(&sys_info) == 0) {
 		info("uptime: %ld secs", sys_info.uptime);
